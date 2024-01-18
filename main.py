@@ -57,10 +57,10 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
         # use polydis
         prmat = utils.nmat_to_prmat(nmat, num_2bar)  # (num_2bar, 32, 128)
         z_txt = txt_enc.forward(prmat).mean
-        # utils.prmat_to_midi_file(prmat, "./result/prmat.mid")
+        # utils.prmat_to_midi_file(prmat, "./prmat.mid")
         if len(chd_tracks) > 0:
             chd = utils.get_chord(music, num_2bar, chd_tracks)
-            # utils.chd_to_midi_file(chd, "./result/chd.mid")
+            # utils.chd_to_midi_file(chd, "./chd.mid")
             z_chd = chd_enc.forward(chd).mean
             zs = [z_chd, z_txt]
         else:
