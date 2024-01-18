@@ -168,10 +168,18 @@ def single_midi(midi, is_melody, note_tracks, chd_tracks, phrase):
 
 
 if __name__ == "__main__":
+    """
+    MIDIs should be 2 tracks: Content (--note-track) & Chords (--chd-track)
+        Chords: 36-48 is bass, 48-60 is chroma
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--midi", help="single generated MIDI file")
     parser.add_argument("--midi-dir", help="directory of generated MIDI files")
-    parser.add_argument("--is-melody", action="store_true")
+    parser.add_argument(
+        "--is-melody",
+        action="store_true",
+        help="If this is monophonic melody (use EC2VAE), otherwise polyphonic accompaniment (use Polydis)",
+    )
     parser.add_argument("--phrase", help="phrase configuration, eg. i4A8B8o4")
     parser.add_argument("--note-track", default=0)
     parser.add_argument("--chd-track", default=1)
