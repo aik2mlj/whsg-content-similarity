@@ -1,3 +1,8 @@
+"""
+IGNORE THIS FILE.
+Not important at all. Util script to crop the first bar of the generated REMI midis
+"""
+
 import os
 
 import muspy

@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import numpy as np
 import torch
@@ -12,14 +13,6 @@ from pretrained_encoders import (
     PolydisTextureEncoder,
 )
 
-# Calculate cosine similarity
-# cosine_sim = F.cosine_similarity(vector1, vector2)
-# print("Cosine Similarity:", cosine_sim.item())
-
-"""
-MIDIs should be 2 tracks: Content & Chords
-    Chords: 36-48 is bass, 48-60 is chroma
-"""
 ec2vae_enc = Ec2VaeEncoder.create_2bar_encoder()
 chd_enc = PolydisChordEncoder.create_encoder()
 txt_enc = PolydisTextureEncoder.create_encoder()
@@ -29,6 +22,15 @@ txt_enc.load_state_dict(torch.load("./pretrained_models/polydis_txt_enc.pt"))
 
 
 def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks=[1]):
+    """
+    CORE FUNCTION: Compute ILS (see WholeSongGen)
+
+    Compute a pairwise similarity matrix of 2-measure segments within a
+    song, ILS is defined as the ratio between same-type phrase similarity and global
+    average similarity, and therefore higher values indicate better structure.
+    """
+
+    # compute the total number of bars
     num_bar = 0
     for phrase in phrase_config:
         assert phrase[1] % 2 == 0
@@ -37,7 +39,8 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
 
     nmat = utils.get_note_matrix(music, note_tracks)
 
-    phrases = []  # (type, start_bar, end_bar)
+    # get phrases (type, start_bar, end_bar)
+    phrases = []
     bar = 0
     for phrase in phrase_config:
         phrases.append((phrase[0], bar // 2, (bar + phrase[1]) // 2))
@@ -67,8 +70,9 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
             # print("NO CHORD! ONLY TXT")
             zs = [z_txt]
 
-    withins, same_types = [], []
+    ILS = []
     for z in zs:
+        # Compute similarity matrix
         bs = z.shape[0]
         size = z.shape[1]
         z_sim_mat = F.cosine_similarity(z[None, :, :], z[:, None, :], dim=-1)
@@ -78,16 +82,7 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
         sim_sum = torch.sum(z_sim_mat)
         total_num = bs * bs
 
-        # # within each phrase
-        # within = 0.
-        # within_num = 0
-        # for tp, start, end in phrases:
-        #     within += torch.sum(z_sim_mat[start: end, start: end])
-        #     within_num += ((end - start)**2)
-        # within = (within / within_num) / (sim_sum / total_num)
-        # withins.append(float(within))
-
-        # same phrase type
+        # Compute ILS
         same_type = 0.0
         s_sum = 0
         for i, (tp_i, start_i, end_i) in enumerate(phrases):
@@ -98,55 +93,18 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
         if s_sum == 0:
             return None
         same_type = (same_type / s_sum) / (sim_sum / total_num)
-        same_types.append(float(same_type))
+        ILS.append(float(same_type))
 
-    # print(withins, same_types)
-    return same_types
+    return ILS
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--midi")
-    parser.add_argument("--melody", action="store_true")
-    parser.add_argument("--phrase", help="phrase configuration, eg. i4A8B8o4")
-    parser.add_argument("--note-track", default=0)
-    parser.add_argument("--chd-track", default=1)
-    args = parser.parse_args()
-
-    # dir = "./128samples/diff+phrase/mel+acc_samples"
-    is_melody = True
-    note_tracks = [0]
-    chd_tracks = [3]
-
-    # if os.path.isdir(dir):
-    #     w, s = [], []
-    #     for phrase_anno in os.scandir(dir):
-    #         if phrase_anno.is_dir():
-    #             phrase_config = utils.phrase_config_from_string(phrase_anno.name)
-    #             print(phrase_config)
-    #             for f in tqdm(os.scandir(phrase_anno.path)):
-    #                 fpath = f.path
-    #                 music = utils.get_music(fpath)
-    #                 same_types = compute_cos_sim(music, phrase_config, is_melody, note_tracks, chd_tracks)
-    #                 s.append(same_types)
-    #     # w = np.array(w)
-    #     # print(w.shape)  # (128, 2)
-    #     # w_mean = w.mean(axis=0)
-    #     # w_std = w.std(axis=0)
-    #     s = np.array(s)
-    #     s_mean = s.mean(axis=0)
-    #     s_std = s.std(axis=0)
-    #     # print(w_mean, w_std)
-    #     print(s_mean, s_std)
-    # else:
-    #     phrase_config = utils.phrase_config_from_string(args.phrase)
-    #     music = utils.get_music(dir)
-    #     print(compute_cos_sim(music, phrase_config, is_melody, note_tracks, chd_tracks))
-
-    midi_dpath = "/home/aik2/Learn/ComputerMusic/WholeSongGen/dataset-code-for-lejun/data/matched_pop909_acc"
+def ground_truth(is_melody, note_tracks, chd_tracks):
+    midi_dpath = "data/matched_pop909_acc"
     midi_fname = "aligned_demo.mid"
-    anno_dpath = "/home/aik2/Learn/ComputerMusic/WholeSongGen/dataset-code-for-lejun/data/original_shuqi_data"
+    anno_dpath = "data/original_shuqi_data"
     anno_fname = "human_label1.txt"
+
+    # songs that have even number of phrases
     good_songs = []
     for i in range(1, 909 + 1):
         anno_fpath = f"{anno_dpath}/{i:03}/{anno_fname}"
@@ -170,20 +128,71 @@ if __name__ == "__main__":
         with open(anno_fpath) as f:
             phrase_annotation = f.readline().strip()
         phrase_config = utils.phrase_config_from_string(phrase_annotation)
-        # print(phrase_config)
         music = utils.get_music(midi_fpath)
         same_types = compute_cos_sim(
             music, phrase_config, is_melody, note_tracks, chd_tracks
         )
         if same_types is not None:
             s.append(same_types)
-        # w = np.array(w)
-        # print(w.shape)  # (128, 2)
-        # w_mean = w.mean(axis=0)
-        # w_std = w.std(axis=0)
     print(len(s))
     s = np.array(s)
     s_mean = s.mean(axis=0)
     s_std = s.std(axis=0)
-    # print(w_mean, w_std)
     print(s_mean, s_std)
+
+
+def from_dir(dir, is_melody, note_tracks, chd_tracks):
+    s = []
+    for phrase_anno in os.scandir(dir):
+        if phrase_anno.is_dir():
+            phrase_config = utils.phrase_config_from_string(phrase_anno.name)
+            print(phrase_config)
+            for f in tqdm(os.scandir(phrase_anno.path)):
+                fpath = f.path
+                music = utils.get_music(fpath)
+                same_types = compute_cos_sim(
+                    music, phrase_config, is_melody, note_tracks, chd_tracks
+                )
+                s.append(same_types)
+    s = np.array(s)
+    s_mean = s.mean(axis=0)
+    s_std = s.std(axis=0)
+    print(s_mean, s_std)
+
+
+def single_midi(midi, is_melody, note_tracks, chd_tracks, phrase):
+    assert phrase is not None
+    phrase_config = utils.phrase_config_from_string(phrase)
+    music = utils.get_music(dir)
+    print(compute_cos_sim(music, phrase_config, is_melody, note_tracks, chd_tracks))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--midi", help="single generated MIDI file")
+    parser.add_argument("--midi-dir", help="directory of generated MIDI files")
+    parser.add_argument("--is-melody", action="store_true")
+    parser.add_argument("--phrase", help="phrase configuration, eg. i4A8B8o4")
+    parser.add_argument("--note-track", default=0)
+    parser.add_argument("--chd-track", default=1)
+    args = parser.parse_args()
+
+    if args.midi is not None:
+        single_midi(
+            args.midi,
+            args.is_melody,
+            [int(args.note_track)],
+            [int(args.chd_track)],
+            args.phrase,
+        )
+        exit(0)
+
+    # midi_dir = "./generated/128samples/ours/mel+acc_samples"
+    assert args.midi_dir is not None
+    from_dir(
+        args.midi_dir,
+        args.is_melody,
+        [int(args.note_track)],
+        [int(args.chd_track)],
+    )
+    ground_truth(args.is_melody, [0], [3])
