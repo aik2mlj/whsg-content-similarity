@@ -1,4 +1,7 @@
+import csv
+
 import matplotlib.pyplot as plt
+import mir_eval
 import music21
 import muspy
 import numpy as np
@@ -145,6 +148,45 @@ def reduce_chd_quality(chd):  # 12
     return chd_red, root
 
 
+def get_chord_from_chdfile(num_2bar, fpath):
+    """
+    chord matrix [M * 36], each line represent the chord of a beat
+    same format as mir_eval.chord.encode():
+        root_number(12), semitone_bitmap(12), bass_number(12)
+    inputs are generated from junyan's algorithm
+    """
+    ONE_BEAT = 0.5
+    file = csv.reader(open(fpath), delimiter="\t")
+    beat_cnt = 0
+    chds = torch.zeros((num_2bar * 8, 36))
+    for line in file:
+        start = float(line[0]) / ONE_BEAT
+        end = float(line[1]) / ONE_BEAT
+        chord = line[2]
+
+        while beat_cnt < int(round(end)):
+            beat_cnt += 1
+            # see https://craffel.github.io/mir_eval/#mir_eval.chord.encode
+            chd_enc = mir_eval.chord.encode(chord)
+
+            root = chd_enc[0]
+            # make chroma absolute
+            chroma_bitmap = chd_enc[1]
+            chroma_bitmap = np.roll(chroma_bitmap, root)
+            bass = chd_enc[2]
+
+            chord_line = [root]
+            for _ in chroma_bitmap:
+                chord_line.append(_)
+            chord_line.append(bass)
+
+            chds[beat_cnt - 1, root] = 1
+            chds[beat_cnt - 1, 24 + bass] = 1
+            for _ in chroma_bitmap:
+                chds[beat_cnt - 1, 12 + _] = 1
+    return chds
+
+
 def get_chord(num_2bar, chd_nmat):
     """
     track indicates the chord track in the midi file
@@ -179,7 +221,7 @@ def get_chord(num_2bar, chd_nmat):
     return chd
 
 
-def get_chord_ec2vae(num_2bar, chd_nmat=None):
+def get_chord_ec2vae(num_2bar, chd_nmat):
     """
     track indicates the chord track in the midi file
     """

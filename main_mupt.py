@@ -33,6 +33,7 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
     """
 
     # compute the total number of bars
+    music.infer_barlines()
     num_bar = len(music.barlines)
     num_2bar = num_bar // 2
     print(num_bar)
@@ -53,6 +54,7 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
     else:
         # use polydis
         prmat = utils.nmat_to_prmat(nmat, num_2bar)  # (num_2bar, 32, 128)
+        print(prmat.shape)
         z_txt = txt_enc.forward(prmat).mean
         # utils.prmat_to_midi_file(prmat, "./prmat.mid")
         if chords is not None:
@@ -71,8 +73,6 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
         size = z.shape[1]
         z_sim_mat = F.cosine_similarity(z[None, :, :], z[:, None, :], dim=-1)
         utils.show_matrix(z_sim_mat)
-        for i in range(bs):
-            assert z_sim_mat[i, i] == 1.0
         sim_sum = torch.sum(z_sim_mat)
         total_num = bs * bs
 
@@ -124,19 +124,16 @@ def ground_truth(is_melody, note_tracks, chd_tracks):
     print(s_mean, s_std)
 
 
-def from_dir(dir, is_melody, note_tracks, chd_tracks):
+def from_dir(dir, is_melody, extract_chord=False):
     s = []
-    for phrase_anno in os.scandir(dir):
-        if phrase_anno.is_dir():
-            phrase_config = utils.phrase_config_from_string(phrase_anno.name)
-            print(phrase_config)
-            for f in tqdm(os.scandir(phrase_anno.path)):
-                fpath = f.path
-                music = utils.get_music(fpath)
-                same_types = compute_cos_sim(
-                    music, phrase_config, is_melody, note_tracks, chd_tracks
-                )
-                s.append(same_types)
+    for midi in os.scandir(dir):
+        fpath = midi.path
+        music = utils.get_music(fpath)
+        if extract_chord:
+            extract_chords_from_midi_file(fpath, "chdfile.txt")
+            chord = get_chord_matrix("chdfile.txt")
+        cos_sim = compute_cos_sim(music, is_melody, chords)
+        s.append(cos_sim)
     s = np.array(s)
     s_mean = s.mean(axis=0)
     s_std = s.std(axis=0)
@@ -145,7 +142,7 @@ def from_dir(dir, is_melody, note_tracks, chd_tracks):
 
 def single_midi(midi, is_melody, chords=None):
     music = utils.get_music(midi)
-    print(compute_cos_sim(music, None, is_melody))
+    print(compute_cos_sim(music, chords, is_melody))
 
 
 if __name__ == "__main__":
@@ -162,8 +159,11 @@ if __name__ == "__main__":
         help="If this is monophonic melody (use EC2VAE), otherwise polyphonic accompaniment (use Polydis)",
     )
     parser.add_argument("--phrase", help="phrase configuration, eg. i4A8B8o4")
-    parser.add_argument("--note-track", default=0)
-    parser.add_argument("--chd-track", default=1)
+    parser.add_argument(
+        "--extract-chord",
+        action="store_true",
+        help="Extract chords from the midi using Junyan's Algorithm",
+    )
     args = parser.parse_args()
 
     if args.midi is not None:
@@ -175,7 +175,5 @@ if __name__ == "__main__":
     from_dir(
         args.midi_dir,
         args.is_melody,
-        [int(args.note_track)],
-        [int(args.chd_track)],
     )
     ground_truth(args.is_melody, [0], [3])
