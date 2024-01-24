@@ -1,12 +1,14 @@
 import argparse
 import os
 
+import muspy
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
 import utils
+from chord_extractor import extract_chords_from_midi_file
 from pretrained_encoders import (
     Ec2VaeEncoder,
     PolydisChordEncoder,
@@ -21,7 +23,7 @@ chd_enc.load_state_dict(torch.load("./pretrained_models/polydis_chd_enc.pt"))
 txt_enc.load_state_dict(torch.load("./pretrained_models/polydis_txt_enc.pt"))
 
 
-def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks=[1]):
+def compute_cos_sim(music: muspy.Music, chords, is_melody):
     """
     CORE FUNCTION: Compute ILS (see WholeSongGen)
 
@@ -31,26 +33,18 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
     """
 
     # compute the total number of bars
-    num_bar = 0
-    for phrase in phrase_config:
-        assert phrase[1] % 2 == 0
-        num_bar += phrase[1]
+    num_bar = len(music.barlines)
     num_2bar = num_bar // 2
+    print(num_bar)
 
-    nmat = utils.get_note_matrix(music, note_tracks)
-
-    # get phrases (type, start_bar, end_bar)
-    phrases = []
-    bar = 0
-    for phrase in phrase_config:
-        phrases.append((phrase[0], bar // 2, (bar + phrase[1]) // 2))
-        bar += phrase[1]
+    nmat = utils.get_note_matrix(music)
+    nmat = utils.dedup_note_matrix(nmat)
 
     if is_melody:
         # use ec2vae
         prmat_ec2vae = utils.namt_to_prmat_ec2vae(nmat, num_2bar)
-        if len(chd_tracks) > 0:
-            chd_ec2vae = utils.get_chord_ec2vae(music, num_2bar, chd_tracks)
+        if chords is not None:
+            chd_ec2vae = utils.get_chord_ec2vae(num_2bar, chords)
             dist_p, dist_r = ec2vae_enc.encoder(prmat_ec2vae, chd_ec2vae)
             zs = [dist_p.mean, dist_r.mean]
         else:
@@ -61,8 +55,8 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
         prmat = utils.nmat_to_prmat(nmat, num_2bar)  # (num_2bar, 32, 128)
         z_txt = txt_enc.forward(prmat).mean
         # utils.prmat_to_midi_file(prmat, "./prmat.mid")
-        if len(chd_tracks) > 0:
-            chd = utils.get_chord(music, num_2bar, chd_tracks)
+        if chords is not None:
+            chd = utils.get_chord(num_2bar, chords)
             # utils.chd_to_midi_file(chd, "./chd.mid")
             z_chd = chd_enc.forward(chd).mean
             zs = [z_chd, z_txt]
@@ -70,32 +64,21 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
             # print("NO CHORD! ONLY TXT")
             zs = [z_txt]
 
-    ILS = []
+    avg = []
     for z in zs:
         # Compute similarity matrix
         bs = z.shape[0]
         size = z.shape[1]
         z_sim_mat = F.cosine_similarity(z[None, :, :], z[:, None, :], dim=-1)
-        # utils.show_matrix(z_sim_mat)
+        utils.show_matrix(z_sim_mat)
         for i in range(bs):
             assert z_sim_mat[i, i] == 1.0
         sim_sum = torch.sum(z_sim_mat)
         total_num = bs * bs
 
-        # Compute ILS
-        same_type = 0.0
-        s_sum = 0
-        for i, (tp_i, start_i, end_i) in enumerate(phrases):
-            for j, (tp_j, start_j, end_j) in enumerate(phrases):
-                if tp_i in ["A", "B"] and tp_i == tp_j and i != j:
-                    same_type += torch.sum(z_sim_mat[start_i:end_i, start_j:end_j])
-                    s_sum += (end_i - start_i) * (end_j - start_j)
-        if s_sum == 0:
-            return None
-        same_type = (same_type / s_sum) / (sim_sum / total_num)
-        ILS.append(float(same_type))
+        avg.append(float(sim_sum / total_num))
 
-    return ILS
+    return avg
 
 
 def ground_truth(is_melody, note_tracks, chd_tracks):
@@ -160,11 +143,9 @@ def from_dir(dir, is_melody, note_tracks, chd_tracks):
     print(s_mean, s_std)
 
 
-def single_midi(midi, is_melody, note_tracks, chd_tracks, phrase):
-    assert phrase is not None
-    phrase_config = utils.phrase_config_from_string(phrase)
-    music = utils.get_music(dir)
-    print(compute_cos_sim(music, phrase_config, is_melody, note_tracks, chd_tracks))
+def single_midi(midi, is_melody, chords=None):
+    music = utils.get_music(midi)
+    print(compute_cos_sim(music, None, is_melody))
 
 
 if __name__ == "__main__":
@@ -186,13 +167,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.midi is not None:
-        single_midi(
-            args.midi,
-            args.is_melody,
-            [int(args.note_track)],
-            [int(args.chd_track)],
-            args.phrase,
-        )
+        single_midi(args.midi, args.is_melody)
         exit(0)
 
     # midi_dir = "./generated/128samples/ours/mel+acc_samples"

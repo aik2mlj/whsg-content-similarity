@@ -16,12 +16,14 @@ def get_music(midi_path):
     return music
 
 
-def get_note_matrix(music, tracks=[0]):
+def get_note_matrix(music: muspy.Music, tracks=None):
     """
     get note matrix: same format as pop909-4-bin
         for piano, this function simply extracts notes of given tracks
     """
     notes = []
+    if tracks is None:
+        tracks = list(range(len(music.tracks)))
     for inst_idx in tracks:
         inst = music.tracks[inst_idx]
         for note in inst.notes:
@@ -30,19 +32,32 @@ def get_note_matrix(music, tracks=[0]):
             if onset >= 0:
                 # this is compulsory because there may be notes
                 # with zero duration after adjusting resolution
-                if duration == 0:
-                    duration = 1
-                notes.append(
-                    [
-                        onset,
-                        note.pitch,
-                        duration,
-                    ]
-                )
+                if duration != 0:
+                    notes.append([onset, note.pitch, duration])
     # sort according to (start, duration)
     # notes.sort(key=lambda x: (x[0] * BIN + x[1], x[2]))
     notes.sort(key=lambda x: (x[0], x[1], x[2]))
     return notes
+
+
+def dedup_note_matrix(notes):
+    """
+    remove duplicated notes (because of multiple tracks)
+    """
+
+    last = []
+    notes_dedup = []
+    for i, note in enumerate(notes):
+        if i != 0:
+            if note[:2] != last[:2]:
+                # if start and pitch are not the same
+                notes_dedup.append(note)
+        else:
+            notes_dedup.append(note)
+        last = note
+    # print(f"dedup: {len(notes) - len(notes_dedup)} : {len(notes)}")
+
+    return notes_dedup
 
 
 def nmat_to_prmat(nmat, num_2bar, n_step=32):
@@ -130,12 +145,10 @@ def reduce_chd_quality(chd):  # 12
     return chd_red, root
 
 
-def get_chord(music, num_2bar, tracks=[1]):
+def get_chord(num_2bar, chd_nmat):
     """
     track indicates the chord track in the midi file
     """
-    chd_nmat = get_note_matrix(music, tracks)
-
     chd = torch.zeros((num_2bar * 8, 36))
     idx = 0
     while idx < len(chd_nmat):
@@ -166,11 +179,10 @@ def get_chord(music, num_2bar, tracks=[1]):
     return chd
 
 
-def get_chord_ec2vae(music, num_2bar, tracks=[1]):
+def get_chord_ec2vae(num_2bar, chd_nmat=None):
     """
     track indicates the chord track in the midi file
     """
-    chd_nmat = get_note_matrix(music, tracks)
 
     chd = torch.zeros((num_2bar * 32, 12))
     idx = 0
