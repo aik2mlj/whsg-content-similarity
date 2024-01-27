@@ -8,7 +8,8 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 import utils
-from chord_extractor import extract_chords_from_midi_file
+
+# from chord_extractor import extract_chords_from_midi_file
 from pretrained_encoders import (
     Ec2VaeEncoder,
     PolydisChordEncoder,
@@ -23,7 +24,7 @@ chd_enc.load_state_dict(torch.load("./pretrained_models/polydis_chd_enc.pt"))
 txt_enc.load_state_dict(torch.load("./pretrained_models/polydis_txt_enc.pt"))
 
 
-def compute_cos_sim(music: muspy.Music, chords, is_melody):
+def compute_cos_sim(music: muspy.Music, chords, is_melody, threshold=0.0):
     """
     CORE FUNCTION: Compute ILS (see WholeSongGen)
 
@@ -36,7 +37,8 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
     music.infer_barlines()
     num_bar = len(music.barlines)
     num_2bar = num_bar // 2
-    print(num_bar)
+    if num_2bar == 0:
+        return []
 
     nmat = utils.get_note_matrix(music)
     nmat = utils.dedup_note_matrix(nmat)
@@ -54,7 +56,7 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
     else:
         # use polydis
         prmat = utils.nmat_to_prmat(nmat, num_2bar)  # (num_2bar, 32, 128)
-        print(prmat.shape)
+        # print(prmat.shape)
         z_txt = txt_enc.forward(prmat).mean
         # utils.prmat_to_midi_file(prmat, "./prmat.mid")
         if chords is not None:
@@ -72,11 +74,14 @@ def compute_cos_sim(music: muspy.Music, chords, is_melody):
         bs = z.shape[0]
         size = z.shape[1]
         z_sim_mat = F.cosine_similarity(z[None, :, :], z[:, None, :], dim=-1)
-        utils.show_matrix(z_sim_mat)
-        sim_sum = torch.sum(z_sim_mat)
-        total_num = bs * bs
+        # utils.show_matrix(z_sim_mat)
+        # get the number of element that is more than a threshold (excluding the diagonal)
+        sim_sum = torch.sum(z_sim_mat[z_sim_mat > threshold]) - bs
+        # sim_sum = torch.sum(z_sim_mat)
+        total_num = bs * bs - bs
 
-        avg.append(float(sim_sum / total_num))
+        if bs > 1:
+            avg.append(float(sim_sum / total_num))
 
     return avg
 
@@ -124,25 +129,31 @@ def ground_truth(is_melody, note_tracks, chd_tracks):
     print(s_mean, s_std)
 
 
-def from_dir(dir, is_melody, extract_chord=False):
+def from_dir(dir, is_melody, threshold, extract_chord=False):
     s = []
     for midi in os.scandir(dir):
         fpath = midi.path
         music = utils.get_music(fpath)
+        chords = None
         if extract_chord:
             extract_chords_from_midi_file(fpath, "chdfile.txt")
-            chord = get_chord_matrix("chdfile.txt")
-        cos_sim = compute_cos_sim(music, is_melody, chords)
-        s.append(cos_sim)
+            chords = get_chord_matrix("chdfile.txt")
+        cos_sim = compute_cos_sim(music, chords, is_melody, threshold)
+        if len(cos_sim) > 0:
+            s.append(cos_sim)
     s = np.array(s)
     s_mean = s.mean(axis=0)
     s_std = s.std(axis=0)
     print(s_mean, s_std)
 
 
-def single_midi(midi, is_melody, chords=None):
+def single_midi(midi, is_melody, threshold, extract_chord=False):
     music = utils.get_music(midi)
-    print(compute_cos_sim(music, chords, is_melody))
+    chords = None
+    if extract_chord:
+        extract_chords_from_midi_file(midi, "chdfile.txt")
+        chords = get_chord_matrix("chdfile.txt")
+    print(compute_cos_sim(music, chords, is_melody, threshold))
 
 
 if __name__ == "__main__":
@@ -164,16 +175,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Extract chords from the midi using Junyan's Algorithm",
     )
+    parser.add_argument("--threshold", default=-100.0, type=float)
     args = parser.parse_args()
+    print(f"threshold: {args.threshold}")
 
     if args.midi is not None:
-        single_midi(args.midi, args.is_melody)
+        single_midi(args.midi, args.is_melody, args.threshold)
         exit(0)
 
     # midi_dir = "./generated/128samples/ours/mel+acc_samples"
     assert args.midi_dir is not None
-    from_dir(
-        args.midi_dir,
-        args.is_melody,
-    )
-    ground_truth(args.is_melody, [0], [3])
+    # for threshold in np.arange(0.3, 1.0, 0.1):
+    from_dir(args.midi_dir, args.is_melody, args.threshold)
+    # ground_truth(args.is_melody, [0], [3])
