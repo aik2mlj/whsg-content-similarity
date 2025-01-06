@@ -78,7 +78,7 @@ def compute_cos_sim(music, phrase_config, is_melody, note_tracks=[0], chd_tracks
         z_sim_mat = F.cosine_similarity(z[None, :, :], z[:, None, :], dim=-1)
         # utils.show_matrix(z_sim_mat)
         for i in range(bs):
-            assert z_sim_mat[i, i] == 1.0
+            assert torch.allclose(z_sim_mat[i, i], torch.tensor(1.0))
         sim_sum = torch.sum(z_sim_mat)
         total_num = bs * bs
 
